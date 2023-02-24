@@ -2,3 +2,5 @@ node_modules
 yarn-error.log
 lib/
 .history
+.vscode
+mr-pdf.pdf

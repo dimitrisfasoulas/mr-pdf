@@ -1,11 +1,19 @@
 {
   "extends": "@tsconfig/node14/tsconfig.json",
   "compilerOptions": {
-    "lib": ["dom"],
+    "lib": [
+      "dom",
+      "ES2021.String"
+    ],
     "rootDir": "src",
     "outDir": "lib",
     "resolveJsonModule": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "lib"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "lib"
+  ]
 }

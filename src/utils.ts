@@ -1,6 +1,7 @@
 import chalk = require('chalk');
 import puppeteer = require('puppeteer');
 import { scrollPageToBottom } from 'puppeteer-autoscroll-down';
+import * as fs from 'fs';
 
 let contentHTML = '';
 export interface generatePDFOptions {
@@ -66,6 +67,13 @@ export async function generatePDF({
         });
       }
 
+      page.on('console', async (msg) => {
+        const msgArgs = msg.args();
+        for (let i = 0; i < msgArgs.length; ++i) {
+          console.log(chalk.yellow(await msgArgs[i].jsonValue()));
+        }
+      });
+
       // Get the HTML string of the content section.
       const html = await page.evaluate(
         ({ contentSelector }) => {
@@ -80,6 +88,93 @@ export async function generatePDF({
             const detailsArray = element.getElementsByTagName('details');
             Array.from(detailsArray).forEach((element) => {
               element.open = true;
+            });
+
+            // Handle tabs
+            const tabsArray = element.getElementsByClassName('tabs-container');
+            Array.from(tabsArray).forEach((element) => {
+              // Get titles of tabs
+              const tabTitles = Array.from(
+                element.getElementsByClassName('tabs__item '),
+              );
+              // Get tab contents
+              const tabContents = Array.from(
+                (element.lastChild as HTMLElement).childNodes,
+              );
+              // Remove hidden attribute from tab contents
+              tabContents.forEach((tabContent) => {
+                (tabContent as HTMLElement).removeAttribute('hidden');
+              });
+              const newElement = document.createElement('div');
+              // Create new elements for each tab
+              tabTitles.map(async (tabTitle, index) => {
+                const newTab = document.createElement('div');
+                newTab.classList.add('margin-top--md');
+                const ul = document.createElement('ul');
+                ul.setAttribute('role', 'tablist');
+                ul.setAttribute('aria-orientation', 'horizontal');
+                ul.setAttribute('class', 'tabs');
+                tabTitle.classList.add('tabs__item--active');
+                newTab.appendChild(ul);
+                ul.appendChild(tabTitle);
+                (tabContents[index] as HTMLElement).style.border =
+                  '1px solid #ccc';
+                newTab.appendChild(tabContents[index]);
+                newElement.appendChild(newTab);
+              });
+
+              element.innerHTML = newElement.innerHTML;
+            });
+
+            // Handle Headings to build TOC
+            const headings = Array.from(element.getElementsByTagName('h1'))
+              .concat(Array.from(element.getElementsByTagName('h2')))
+              .concat(Array.from(element.getElementsByTagName('h3')));
+
+            headings.forEach((heading) => {
+              // console.log(heading.id);
+              if (heading.innerText === 'On this page') {
+                // Remove On this page heading
+                // heading.id = '';
+              } else {
+                // Ignore H2 and H3 headings with no existing id
+                if (heading.tagName === 'H1' || !!heading.id) {
+                  // console.log(
+                  //   `working on ${heading.innerText} with tag ${heading.tagName} and id ${heading.id}`,
+                  // );
+                  // Add a unique id to each heading based on the url path
+                  heading.id =
+                    document.location.pathname
+                      .split('/')
+                      .join('_')
+                      .substring(1) + heading.id;
+                  if (heading.id === '') {
+                    heading.id = heading.innerText.split(' ').join('-');
+                  }
+                  // } else {
+                  //   console.log(
+                  //     `ignoring ${heading.innerText} with tag ${heading.tagName} and id ${heading.id}`,
+                  //   );
+                }
+              }
+            });
+
+            // Handle a tags to build TOC
+            const aTags = Array.from(element.getElementsByTagName('a'));
+            aTags.forEach((aTag) => {
+              // Handle internal links only
+              if (
+                !aTag.getAttribute('href')?.startsWith('http') &&
+                !aTag.getAttribute('href')?.startsWith('#')
+              ) {
+                // Convert href to unique id
+                // console.log(`working on ${aTag.getAttribute('href')}`);
+                aTag.href = '#'.concat(
+                  (aTag.getAttribute('href') || '').split('/').join('_'),
+                );
+                // } else {
+                // console.log(`ignoring ${aTag.getAttribute('href')}`);
+              }
             });
 
             return element.outerHTML;
@@ -196,6 +291,9 @@ export async function generatePDF({
     headerTemplate,
     footerTemplate,
   });
+
+  fs.writeFileSync('./temp/mr-context.html', contentHTML);
+  fs.writeFileSync('./temp/mr-toc.html', tocHTML);
 }
 
 function generateToc(contentHtml: string) {
@@ -218,6 +316,8 @@ function generateToc(contentHtml: string) {
       .replace(/<[^>]*>/g, '')
       .trim();
 
+    const originalHeaderId = matchedStr.match(/id( )*=( )*"(.*)"/)?.[3] || '';
+
     const headerId = `${Math.random().toString(36).substr(2, 5)}-${
       headers.length
     }`;
@@ -225,31 +325,52 @@ function generateToc(contentHtml: string) {
     // level is h<level>
     const level = Number(matchedStr[matchedStr.indexOf('h') + 1]);
 
-    headers.push({
-      header: headerText,
-      level,
-      id: headerId,
-    });
+    // Ignore On this page header
+    if (headerText !== 'On this page') {
+      headers.push({
+        header: headerText,
+        level,
+        id: originalHeaderId,
+      });
+    }
+
+    // console.log(
+    //   chalk.blueBright(
+    //     `Found header: ${headerText} with level ${level} and id ${originalHeaderId}`,
+    //   ),
+    // );
 
     const modifiedContentHTML = matchedStr.replace(/<h[1-3].*?>/g, (header) => {
-      if (header.match(/id( )*=( )*"/g)) {
-        return header.replace(/id( )*=( )*"/g, `id="${headerId} `);
-      } else {
-        return header.substring(0, header.length - 1) + ` id="${headerId}">`;
-      }
+      // if (header.match(/id( )*=( )*"/g)) {
+      //   return header.replace(/id( )*=( )*".*"/g, `id="${headerId}"`);
+      // } else {
+      return (
+        header.substring(0, header.length - 1) + ` id="${originalHeaderId}">`
+      );
+      // }
     });
 
+    // console.log(modifiedContentHTML);
     return modifiedContentHTML;
   }
 
   const toc = headers
-    .map(
-      (header) =>
-        `<li class="toc-item toc-item-${header.level}" style="margin-left:${
-          (header.level - 1) * 20
-        }px"><a href="#${header.id}">${header.header}</a></li>`,
-    )
+    .map((header) => {
+      let id;
+      if (header.id[0] === '#') {
+        id = header.id;
+      } else {
+        id = `#${header.id}`;
+      }
+      return `<li class="toc-item toc-item-${
+        header.level
+      }" style="margin-left:${(header.level - 1) * 20}px"><a href="${id}">${
+        header.header
+      }</a></li>`;
+    })
     .join('\n');
+
+  // console.log(chalk.magenta('TOC: ', toc));
 
   const tocHTML = `
   <div class="toc-page" style="page-break-after: always;">
